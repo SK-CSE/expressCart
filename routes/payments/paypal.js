@@ -1,7 +1,8 @@
-let express = require('express');
-let common = require('../../lib/common');
-let paypal = require('paypal-rest-sdk');
-let router = express.Router();
+const express = require('express');
+const common = require('../../lib/common');
+const { indexOrders } = require('../../lib/indexing');
+const paypal = require('paypal-rest-sdk');
+const router = express.Router();
 
 router.get('/checkout_cancel', (req, res, next) => {
     // return to checkout for adjustment or repayment
@@ -9,12 +10,12 @@ router.get('/checkout_cancel', (req, res, next) => {
 });
 
 router.get('/checkout_return', (req, res, next) => {
-    let db = req.app.db;
-    let config = req.app.config;
-    let paymentId = req.session.paymentId;
-    let payerId = req.query['PayerID'];
+    const db = req.app.db;
+    const config = req.app.config;
+    const paymentId = req.session.paymentId;
+    const payerId = req.query.PayerID;
 
-    let details = {'payer_id': payerId};
+    const details = { payer_id: payerId };
     paypal.payment.execute(paymentId, details, (error, payment) => {
         let paymentApproved = false;
         let paymentMessage = '';
@@ -40,7 +41,7 @@ router.get('/checkout_return', (req, res, next) => {
             return;
         }
 
-        let paymentOrderId = req.session.orderId;
+        const paymentOrderId = req.session.orderId;
         let paymentStatus = 'Approved';
 
         // fully approved
@@ -66,17 +67,17 @@ router.get('/checkout_return', (req, res, next) => {
         }
 
         // update the order status
-        db.orders.update({_id: common.getId(paymentOrderId)}, {$set: {orderStatus: paymentStatus}}, {multi: false}, (err, numReplaced) => {
+        db.orders.updateOne({ _id: common.getId(paymentOrderId) }, { $set: { orderStatus: paymentStatus } }, { multi: false }, (err, numReplaced) => {
             if(err){
                 console.info(err.stack);
             }
-            db.orders.findOne({_id: common.getId(paymentOrderId)}, (err, order) => {
+            db.orders.findOne({ _id: common.getId(paymentOrderId) }, (err, order) => {
                 if(err){
                     console.info(err.stack);
                 }
 
                 // add to lunr index
-                common.indexOrders(req.app)
+                indexOrders(req.app)
                 .then(() => {
                     // set the results
                     req.session.messageType = 'success';
@@ -85,7 +86,7 @@ router.get('/checkout_return', (req, res, next) => {
                     req.session.paymentApproved = paymentApproved;
                     req.session.paymentDetails = paymentDetails;
 
-                    let paymentResults = {
+                    const paymentResults = {
                         message: req.session.message,
                         messageType: req.session.messageType,
                         paymentEmailAddr: req.session.paymentEmailAddr,
@@ -106,26 +107,26 @@ router.get('/checkout_return', (req, res, next) => {
 
 // The homepage of the site
 router.post('/checkout_action', (req, res, next) => {
-    let db = req.app.db;
-    let config = req.app.config;
-    let paypalConfig = common.getPaymentConfig();
+    const db = req.app.db;
+    const config = req.app.config;
+    const paypalConfig = common.getPaymentConfig();
 
     // setup the payment object
-    let payment = {
-        'intent': 'sale',
-        'payer': {
-            'payment_method': 'paypal'
+    const payment = {
+        intent: 'sale',
+        payer: {
+            payment_method: 'paypal'
         },
-        'redirect_urls': {
-            'return_url': config.baseUrl + '/paypal/checkout_return',
-            'cancel_url': config.baseUrl + '/paypal/checkout_cancel'
+        redirect_urls: {
+            return_url: config.baseUrl + '/paypal/checkout_return',
+            cancel_url: config.baseUrl + '/paypal/checkout_cancel'
         },
-        'transactions': [{
-            'amount': {
-                'total': req.session.totalCartAmount,
-                'currency': paypalConfig.paypalCurrency
+        transactions: [{
+            amount: {
+                total: req.session.totalCartAmount,
+                currency: paypalConfig.paypalCurrency
             },
-            'description': paypalConfig.paypalCartDescription
+            description: paypalConfig.paypalCartDescription
         }]
     };
 
@@ -144,7 +145,7 @@ router.post('/checkout_action', (req, res, next) => {
             req.session.paymentId = payment.id;
             let redirectUrl;
             for(let i = 0; i < payment.links.length; i++){
-                let link = payment.links[i];
+                const link = payment.links[i];
                 if(link.method === 'REDIRECT'){
                     redirectUrl = link.href;
                 }
@@ -159,7 +160,7 @@ router.post('/checkout_action', (req, res, next) => {
             }
 
             // new order doc
-            let orderDoc = {
+            const orderDoc = {
                 orderPaymentId: payment.id,
                 orderPaymentGateway: 'Paypal',
                 orderTotal: req.session.totalCartAmount,
@@ -185,13 +186,13 @@ router.post('/checkout_action', (req, res, next) => {
                 res.redirect(redirectUrl);
             }else{
                 // no order ID so we create a new one
-                db.orders.insert(orderDoc, (err, newDoc) => {
+                db.orders.insertOne(orderDoc, (err, newDoc) => {
                     if(err){
                         console.info(err.stack);
                     }
 
                     // get the new ID
-                    let newId = newDoc.insertedIds['0'];
+                    const newId = newDoc.insertedId;
 
                     // set the order ID in the session
                     req.session.orderId = newId;

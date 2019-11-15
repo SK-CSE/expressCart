@@ -2,7 +2,7 @@
 
 ![expressCart](https://raw.githubusercontent.com/mrvautin/expressCart/master/public/images/logo.png)
 
-`expressCart` is a fully functional shopping cart built in Node.js (Express, MongoDB) with Stripe, PayPal and Authorize.net payments.
+`expressCart` is a fully functional shopping cart built in Node.js (Express, MongoDB) with Stripe, PayPal, Authorize.net and Adyen payments.
 
 [![Github stars](https://img.shields.io/github/stars/mrvautin/expressCart.svg?style=social&label=Star)](https://github.com/mrvautin/expressCart)
 [![Build Status](https://travis-ci.org/mrvautin/expressCart.svg?branch=master)](https://travis-ci.org/mrvautin/expressCart)
@@ -42,6 +42,20 @@ The easiest way to get up and running is using Docker. Once the Docker CLI is in
 [![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/mrvautin/expressCart)
 
 > Note: When deploying to Heroku you will need to configure your external MongoDB either on your own server or a hosted service on mLab, AWS etc.
+
+### Sample/Test data
+
+Sometimes you might want some default sample/test data. To create this, run `npm run testdata`. Remember to only run this initially or anytime you want to reset the data as this function deletes ALL existing data.
+
+## API
+
+There is currently a limited API for certain functions of the app. Using the API can be done by firstly generating an API key via the Admin login. `Admin > My Account > API Key (Generate) button`. Once an API Key is generated it will need to be supplied in a header called `apiKey` to authenticate requests. 
+
+## Hooks / Integrations
+
+On the completion of a order if a `orderHook` URL is configured, expressCart will POST the data to the configured URL. This is handy or IFTTT or Zapier Webhooks where you may want to use the integration methods to retrieve the order details in other systems.
+
+Example use might be to send all orders to a Google Docs spreadsheet or an accounting package or a packing slip software etc.
 
 ## Admin
 
@@ -104,6 +118,13 @@ Note: An `Options` value is not required when `Type` is set to `Checkbox`.
 
 Tags are used when indexing the products for search. It's advised to set tags (keywords) so that customers can easily find the products they are searching for.
 
+## Subscriptions (Stripe only)
+
+You are able to setup product subscriptions through Stripe. First setup the `Plan` in the [Stripe dashboard](https://dashboard.stripe.com/) then enter the Plan ID (Formatted: plan_XXXXXXXXXXXXXX) when creating or editing a product. When purchasing, a customer can only add a single subscription to their cart at one time. Subscriptions cannot be combined with other products in their cart. On Checkout/Payment the customer and subscription is created in Stripe and the billing cycle commences based on the plan setup.
+
+##### Subscription Webhooks (Stripe only)
+You are able to configure a Webhook in Stripe to receive subscription updates on successful/failed payments [here](https://dashboard.stripe.com/webhooks). The `expressCart` Webhook endpoint should be set to: `https://<example.com>/stripe/subscription_update`. You will need to set the `Events to send` value to both: `invoice.payment_failed` and `invoice.payment_succeeded`.
+
 ## Database
 
 `expressCart` uses a MongoDB for storing all the data. Setting of the database connection string is done through the `/config/settings.json` file. There are two properties relating to the database connection:
@@ -129,6 +150,8 @@ All settings are stored in json files in the `/config` directory. The main appli
 ##### Local configuration
 
 If you'd rather store settings in a file which isn't checked into version control, you can create a new settings file at `/config/settings-local.json` and store your complete settings there. When viewing or editing settings in the admin panel, expressCart will detect the existence of this file and update it accordingly.
+
+This can also be used for payment modules too. Any settings in the `/config/<gateway>-local.json` file will override the `/config/<gateway>.json` file.
 
 ##### Cart name and Cart description
 
@@ -219,10 +242,11 @@ The Stripe config file is located: `/config/stripe.json`. A example Stripe setti
     "stripeCurrency": "usd", The Stripe currency to charge in
     "stripeDescription": "expressCart payment", // Shows as the Stripe description
     "stripeLogoURL": "http://localhost:1111/images/stripelogo.png" // URL to the logo to display on Stripe form
+    "stripeWebhookSecret": "whsec_this_is_not_real"
 }
 ```
 
-Note: The `secretKey` and `publicKey` is obtained from your Stripe account dashboard.
+Note: The `secretKey`, `publicKey` and `stripeWebhookSecret` is obtained from your Stripe account dashboard.
 
 ##### Authorize.net (Payments)
 
@@ -238,6 +262,23 @@ The Authorize.net config file is located: `/config/authorizenet.json`. A example
 ```
 
 Note: The credentials are obtained from your Authorize.net account dashboard.
+
+##### Adyen (Payments)
+
+The Adyen config file is located: `/config/adyen.json`. A example Adyen settings file is provided:
+
+```
+{
+    "environment": "TEST",
+    "apiKey": "this_is_not_real",
+    "publicKey": "this_is_not_real",
+    "merchantAccount": "this_is_not_real",
+    "statementDescriptor": "a_statement_descriptor",
+    "currency": "AUD"
+}
+```
+
+Note: The `publicKey`, `apiKey` and `merchantAccount` is obtained from your Adyen account dashboard.
 
 ## Email settings
 

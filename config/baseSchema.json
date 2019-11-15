@@ -83,14 +83,42 @@
         },
         "paymentGateway": {
             "type": "string",
-            "enum": ["paypal", "stripe", "authorizenet"]
+            "enum": ["paypal", "stripe", "authorizenet", "adyen"]
         },
         "databaseConnectionString": {
-            "format": "uri-template",
             "type": "string"
         },
         "theme": {
             "type": "string"
+        },
+        "themeViews": {
+            "type": "string"
+        },
+        "env": {
+            "type": "string"
+        },
+        "trackStock": {
+            "type": "boolean",
+            "default": false
+        },
+        "orderHook": {
+            "format": "uri-template"
+        },
+        "secretCookie": {
+            "type": "string"
+        },
+        "secretSession": {
+            "type": "string"
+        },
+        "availableLanguages": {
+            "type": "array"
+        },
+        "defaultLocale": {
+            "type": "string"
+        },
+        "enableLanguages": {
+            "type": "boolean",
+            "default": true
         }
     },
     "required": [

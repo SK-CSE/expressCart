@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const stripBom = require('strip-bom');
 const common = require('../../lib/common');
+const { indexOrders } = require('../../lib/indexing');
 const router = express.Router();
 
 // The homepage of the site
@@ -34,8 +35,8 @@ router.post('/checkout_action', (req, res, next) => {
         }
     };
 
-    axios.post(authorizeUrl, chargeJson, {responseType: 'text'})
-    .then((response) => {
+    axios.post(authorizeUrl, chargeJson, { responseType: 'text' })
+    .then(async(response) => {
         // This is crazy but the Authorize.net API returns a string with BOM and totally
         // screws the JSON response being parsed. So many hours wasted!
         const txn = JSON.parse(stripBom(response.data)).transactionResponse;
@@ -43,7 +44,7 @@ router.post('/checkout_action', (req, res, next) => {
         if(!txn){
             console.log('Declined request payload', chargeJson);
             console.log('Declined response payload', response.data);
-            res.status(400).json({err: 'Your payment has declined. Please try again'});
+            res.status(400).json({ err: 'Your payment has declined. Please try again' });
             return;
         }
 
@@ -54,7 +55,7 @@ router.post('/checkout_action', (req, res, next) => {
             orderStatus = 'Declined';
         }
 
-        let orderDoc = {
+        const orderDoc = {
             orderPaymentId: txn.transHash,
             orderPaymentGateway: 'AuthorizeNet',
             orderPaymentMessage: 'Your payment was successfully completed',
@@ -75,16 +76,14 @@ router.post('/checkout_action', (req, res, next) => {
         };
 
         // insert order into DB
-        db.orders.insert(orderDoc, (err, newDoc) => {
-            if(err){
-                console.info(err.stack);
-            }
+        try{
+            const newDoc = await db.orders.insertOne(orderDoc);
 
             // get the new ID
-            let newId = newDoc.insertedIds['0'];
+            const newId = newDoc.insertedId;
 
             // add to lunr index
-            common.indexOrders(req.app)
+            indexOrders(req.app)
             .then(() => {
                 // if approved, send email etc
                 if(orderStatus === 'Paid'){
@@ -97,7 +96,7 @@ router.post('/checkout_action', (req, res, next) => {
                     <p><strong>Transaction ID: </strong>${txn.transHash}</p>`;
 
                     // set payment results for email
-                    let paymentResults = {
+                    const paymentResults = {
                         message: req.session.message,
                         messageType: req.session.messageType,
                         paymentEmailAddr: req.session.paymentEmailAddr,
@@ -117,7 +116,7 @@ router.post('/checkout_action', (req, res, next) => {
                     common.sendEmail(req.session.paymentEmailAddr, `Your payment with ${config.cartTitle}`, common.getEmailTemplate(paymentResults));
 
                     // redirect to outcome
-                    res.status(200).json({orderId: newId});
+                    res.status(200).json({ orderId: newId });
                 }else{
                     // redirect to failure
                     req.session.messageType = 'danger';
@@ -125,14 +124,17 @@ router.post('/checkout_action', (req, res, next) => {
                     req.session.paymentApproved = false;
                     req.session.paymentDetails = `<p><strong>Order ID: </strong>${newId}
                     </p><p><strong>Transaction ID: </strong> ${txn.transHash}</p>`;
-                    res.status(400).json({err: true, orderId: newId});
+                    res.status(400).json({ err: true, orderId: newId });
                 }
             });
-        });
+        }catch(ex){
+            console.log('Error sending payment to API', ex);
+            res.status(400).json({ err: 'Your payment has declined. Please try again' });
+        }
     })
     .catch((err) => {
         console.log('Error sending payment to API', err);
-        res.status(400).json({err: 'Your payment has declined. Please try again'});
+        res.status(400).json({ err: 'Your payment has declined. Please try again' });
     });
 });
 

@@ -6,23 +6,23 @@
             <h1 class="col s12 m10 product-title">{{result.productTitle}}</h1>
             <h4 class="col s12 m10 product-price">{{currencySymbol config.currencySymbol}}{{result.productPrice}}</h4>
             {{#if productOptions}}
-                <h4 class="col s12 m10 product-option">Options</h4>
+                <h4 class="col s12 m10 product-option">{{ @root.__ "Options" }}</h4>
                 <div class="col s12 m10">
                 {{#each productOptions}}
                     {{#ifCond this.optType '==' "select"}}
                         <strong>{{this.optName}}</strong>
                         <select name="opt-{{this.optName}}" class="form-control product-opt">
-                            {{#each this.optOptions}}
+                            {{#each ../this.optOptions}}
                                 <option value="{{this}}">{{this}}</option>
                             {{/each}}
                         </select>
                     {{/ifCond}}
                     {{#ifCond this.optType '==' "radio"}}
-                        {{#each this.optOptions}}
+                        {{#each ../this.optOptions}}
                             <strong>{{this.optName}}</strong>
                             <div class="radio">
                                 <label>
-                                    <input type="radio" class="product-opt" name="opt-{{../this.optName}}" value="{{this}}">
+                                    <input type="radio" class="product-opt" name="opt-{{../../this.optName}}" value="{{this}}">
                                     {{this}}
                                 </label>
                             </div>
@@ -31,15 +31,24 @@
                     {{#ifCond this.optType '==' "checkbox"}}
                         <div class="checkbox">
                             <label>
-                                <input type="checkbox" class="product-opt" name="opt-{{../this.optName}}" value="{{this.optName}}"><strong>{{this.optName}}</strong>
+                                <input type="checkbox" class="product-opt" name="opt-{{../this.optName}}" value="{{../this.optName}}"><strong>{{../this.optName}}</strong>
                             </label>
                         </div>
                     {{/ifCond}}
                 {{/each}}
                 </div>
             {{/if}}
+            {{#if config.trackStock}}
+                {{#ifCond result.productStock '==' 0}}
+                <div class="col-md-10">
+                    <h4 class="text-danger text-center">
+                        Out of stock
+                    </h4>
+                </div>
+                {{/ifCond}}
+            {{/if}}
             <div class="col s10 productOptions">
-                <p class="product-option-text">Quantity</p>
+                <p class="product-option-text">{{ @root.__ "Quantity" }}</p>
                 <div class="input-group">
                     <span class="input-group-btn">
                         <button class="btn waves-effect waves-light black qty-btn-minus" type="button">-</button>
@@ -54,12 +63,12 @@
             </div>
             {{#if result.productComment}}
             <div class="col-md-10">
-                Leave a comment?
+                {{ @root.__ "Leave a comment?" }}
                 <textarea class="form-control" id="product_comment"></textarea>
             </div>
             {{/if}}
             <div class="btnAddToCart">
-                <button class="btn waves-effect waves-light black col s10 product-add-to-cart" type="button">Add to cart</button>
+                <button class="btn waves-effect waves-light black col s10 product-add-to-cart" type="button">{{ @root.__ "Add to cart" }}</button>
             </div>
             <div class="col s10 body_text">
                 {{{productDescription}}}

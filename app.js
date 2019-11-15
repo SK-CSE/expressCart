@@ -5,49 +5,62 @@ const cookieParser = require('cookie-parser');
 const bodyParser = require('body-parser');
 const session = require('express-session');
 const moment = require('moment');
+const _ = require('lodash');
 const MongoStore = require('connect-mongodb-session')(session);
-const MongoClient = require('mongodb').MongoClient;
 const numeral = require('numeral');
 const helmet = require('helmet');
 const colors = require('colors');
+const cron = require('node-cron');
+const crypto = require('crypto');
 const common = require('./lib/common');
-const mongodbUri = require('mongodb-uri');
+const { runIndexing } = require('./lib/indexing');
+const { addSchemas } = require('./lib/schema');
+const { initDb } = require('./lib/db');
 let handlebars = require('express-handlebars');
+const i18n = require('i18n');
 
 // Validate our settings schema
 const Ajv = require('ajv');
-const ajv = new Ajv({useDefaults: true});
+const ajv = new Ajv({ useDefaults: true });
 
-const baseConfig = ajv.validate(require('./config/baseSchema'), require('./config/settings.json'));
+// get config
+const config = common.getConfig();
+
+const baseConfig = ajv.validate(require('./config/baseSchema'), config);
 if(baseConfig === false){
     console.log(colors.red(`settings.json incorrect: ${ajv.errorsText()}`));
     process.exit(2);
 }
 
-// get config
-let config = common.getConfig();
-
 // Validate the payment gateway config
-if(config.paymentGateway === 'paypal'){
-    const paypalConfig = ajv.validate(require('./config/paypalSchema'), require('./config/paypal.json'));
-    if(paypalConfig === false){
-        console.log(colors.red(`PayPal config is incorrect: ${ajv.errorsText()}`));
-        process.exit(2);
-    }
-}
-if(config.paymentGateway === 'stripe'){
-    const stripeConfig = ajv.validate(require('./config/stripeSchema'), require('./config/stripe.json'));
-    if(stripeConfig === false){
-        console.log(colors.red(`Stripe config is incorrect: ${ajv.errorsText()}`));
-        process.exit(2);
-    }
-}
-if(config.paymentGateway === 'authorizenet'){
-    const authorizenetConfig = ajv.validate(require('./config/authorizenetSchema'), require('./config/authorizenet.json'));
-    if(authorizenetConfig === false){
-        console.log(colors.red(`Authorizenet config is incorrect: ${ajv.errorsText()}`));
-        process.exit(2);
-    }
+switch(config.paymentGateway){
+    case'paypal':
+        if(ajv.validate(require('./config/paypalSchema'), require('./config/paypal.json')) === false){
+            console.log(colors.red(`PayPal config is incorrect: ${ajv.errorsText()}`));
+            process.exit(2);
+        }
+        break;
+
+    case'stripe':
+        if(ajv.validate(require('./config/stripeSchema'), require('./config/stripe.json')) === false){
+            console.log(colors.red(`Stripe config is incorrect: ${ajv.errorsText()}`));
+            process.exit(2);
+        }
+        break;
+
+    case'authorizenet':
+        if(ajv.validate(require('./config/authorizenetSchema'), require('./config/authorizenet.json')) === false){
+            console.log(colors.red(`Authorizenet config is incorrect: ${ajv.errorsText()}`));
+            process.exit(2);
+        }
+        break;
+
+    case'adyen':
+        if(ajv.validate(require('./config/adyenSchema'), require('./config/adyen.json')) === false){
+            console.log(colors.red(`adyen config is incorrect: ${ajv.errorsText()}`));
+            process.exit(2);
+        }
+        break;
 }
 
 // require the routes
@@ -60,8 +73,23 @@ const user = require('./routes/user');
 const paypal = require('./routes/payments/paypal');
 const stripe = require('./routes/payments/stripe');
 const authorizenet = require('./routes/payments/authorizenet');
+const adyen = require('./routes/payments/adyen');
 
 const app = express();
+
+// Language initialize
+i18n.configure({
+    locales: config.availableLanguages,
+    defaultLocale: config.defaultLocale,
+    cookie: 'locale',
+    queryParameter: 'lang',
+    directory: `${__dirname}/locales`,
+    directoryPermissions: '755',
+    api: {
+        __: '__', // now req.__ becomes req.__
+        __n: '__n' // and req.__n can be called as req.__n
+    }
+});
 
 // view engine setup
 app.set('views', path.join(__dirname, '/views'));
@@ -69,14 +97,24 @@ app.engine('hbs', handlebars({
     extname: 'hbs',
     layoutsDir: path.join(__dirname, 'views', 'layouts'),
     defaultLayout: 'layout.hbs',
-    partialsDir: [ path.join(__dirname, 'views') ]
+    partialsDir: [path.join(__dirname, 'views')]
 }));
 app.set('view engine', 'hbs');
 
 // helpers for the handlebar templating platform
 handlebars = handlebars.create({
     helpers: {
-        perRowClass: function(numProducts){
+        // Language helper
+        __: () => { return i18n.__(this, arguments); }, // eslint-disable-line no-undef
+        __n: () => { return i18n.__n(this, arguments); }, // eslint-disable-line no-undef
+        availableLanguages: (block) => {
+            let total = '';
+            for(const lang of i18n.getLocales()){
+                total += block.fn(lang);
+            }
+            return total;
+        },
+        perRowClass: (numProducts) => {
             if(parseInt(numProducts) === 1){
                 return'col-md-12 col-xl-12 col m12 xl12 product-item';
             }
@@ -92,7 +130,7 @@ handlebars = handlebars.create({
 
             return'col-md-6 col-xl-6 col m6 xl6 product-item';
         },
-        menuMatch: function(title, search){
+        menuMatch: (title, search) => {
             if(!title || !search){
                 return'';
             }
@@ -101,111 +139,117 @@ handlebars = handlebars.create({
             }
             return'';
         },
-        getTheme: function(view){
+        getTheme: (view) => {
             return`themes/${config.theme}/${view}`;
         },
-        formatAmount: function(amt){
+        formatAmount: (amt) => {
             if(amt){
                 return numeral(amt).format('0.00');
             }
             return'0.00';
         },
-        amountNoDecimal: function(amt){
+        amountNoDecimal: (amt) => {
             if(amt){
                 return handlebars.helpers.formatAmount(amt).replace('.', '');
             }
             return handlebars.helpers.formatAmount(amt);
         },
-        getStatusColor: function (status){
+        getStatusColor: (status) => {
             switch(status){
-            case'Paid':
-                return'success';
-            case'Approved':
-                return'success';
-            case'Approved - Processing':
-                return'success';
-            case'Failed':
-                return'danger';
-            case'Completed':
-                return'success';
-            case'Shipped':
-                return'success';
-            case'Pending':
-                return'warning';
-            default:
-                return'danger';
+                case'Paid':
+                    return'success';
+                case'Approved':
+                    return'success';
+                case'Approved - Processing':
+                    return'success';
+                case'Failed':
+                    return'danger';
+                case'Completed':
+                    return'success';
+                case'Shipped':
+                    return'success';
+                case'Pending':
+                    return'warning';
+                default:
+                    return'danger';
             }
         },
-        checkProductOptions: function (opts){
+        checkProductOptions: (opts) => {
             if(opts){
                 return'true';
             }
             return'false';
         },
-        currencySymbol: function(value){
+        currencySymbol: (value) => {
             if(typeof value === 'undefined' || value === ''){
                 return'$';
             }
             return value;
         },
-        objectLength: function(obj){
+        objectLength: (obj) => {
             if(obj){
                 return Object.keys(obj).length;
             }
             return 0;
         },
-        checkedState: function (state){
+        stringify: (obj) => {
+            if(obj){
+                return JSON.stringify(obj);
+            }
+            return'';
+        },
+        checkedState: (state) => {
             if(state === 'true' || state === true){
                 return'checked';
             }
             return'';
         },
-        selectState: function (state, value){
+        selectState: (state, value) => {
             if(state === value){
                 return'selected';
             }
             return'';
         },
-        isNull: function (value, options){
+        isNull: (value, options) => {
             if(typeof value === 'undefined' || value === ''){
                 return options.fn(this);
             }
             return options.inverse(this);
         },
-        toLower: function (value){
+        toLower: (value) => {
             if(value){
                 return value.toLowerCase();
             }
             return null;
         },
-        formatDate: function (date, format){
+        formatDate: (date, format) => {
             return moment(date).format(format);
         },
-        ifCond: function (v1, operator, v2, options){
+        ifCond: (v1, operator, v2, options) => {
             switch(operator){
-            case'==':
-                return(v1 === v2) ? options.fn(this) : options.inverse(this);
-            case'!=':
-                return(v1 !== v2) ? options.fn(this) : options.inverse(this);
-            case'===':
-                return(v1 === v2) ? options.fn(this) : options.inverse(this);
-            case'<':
-                return(v1 < v2) ? options.fn(this) : options.inverse(this);
-            case'<=':
-                return(v1 <= v2) ? options.fn(this) : options.inverse(this);
-            case'>':
-                return(v1 > v2) ? options.fn(this) : options.inverse(this);
-            case'>=':
-                return(v1 >= v2) ? options.fn(this) : options.inverse(this);
-            case'&&':
-                return(v1 && v2) ? options.fn(this) : options.inverse(this);
-            case'||':
-                return(v1 || v2) ? options.fn(this) : options.inverse(this);
-            default:
-                return options.inverse(this);
+                case'==':
+                    return(v1 === v2) ? options.fn(this) : options.inverse(this);
+                case'!=':
+                    return(v1 !== v2) ? options.fn(this) : options.inverse(this);
+                case'===':
+                    return(v1 === v2) ? options.fn(this) : options.inverse(this);
+                case'<':
+                    return(v1 < v2) ? options.fn(this) : options.inverse(this);
+                case'<=':
+                    return(v1 <= v2) ? options.fn(this) : options.inverse(this);
+                case'>':
+                    return(v1 > v2) ? options.fn(this) : options.inverse(this);
+                case'>=':
+                    return(v1 >= v2) ? options.fn(this) : options.inverse(this);
+                case'&&':
+                    return(v1 && v2) ? options.fn(this) : options.inverse(this);
+                case'||':
+                    return(v1 || v2) ? options.fn(this) : options.inverse(this);
+                default:
+                    return options.inverse(this);
             }
         },
-        isAnAdmin: function (value, options){
+        isAnAdmin: (value, options) => {
             if(value === 'true' || value === true){
                 return options.fn(this);
             }
@@ -215,29 +259,52 @@ handlebars = handlebars.create({
 });
 
 // session store
-let store = new MongoStore({
+const store = new MongoStore({
     uri: config.databaseConnectionString,
     collection: 'sessions'
 });
+
+// Setup secrets
+if(!config.secretCookie || config.secretCookie === ''){
+    const randomString = crypto.randomBytes(20).toString('hex');
+    config.secretCookie = randomString;
+    common.updateConfigLocal({ secretCookie: randomString });
+}
+if(!config.secretSession || config.secretSession === ''){
+    const randomString = crypto.randomBytes(20).toString('hex');
+    config.secretSession = randomString;
+    common.updateConfigLocal({ secretSession: randomString });
+}
 
 app.enable('trust proxy');
 app.use(helmet());
 app.set('port', process.env.PORT || 1111);
 app.use(logger('dev'));
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({extended: false}));
-app.use(cookieParser('5TOCyfH3HuszKGzFZntk'));
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(cookieParser(config.secretCookie));
 app.use(session({
     resave: true,
     saveUninitialized: true,
-    secret: 'pAgGxo8Hzg7PFlv1HpO8Eg0Y6xtP7zYx',
+    secret: config.secretSession,
     cookie: {
         path: '/',
         httpOnly: true,
-        maxAge: 3600000 * 24
+        maxAge: 900000
     },
     store: store
 }));
+
+app.use(bodyParser.json({
+    // Only on Stripe URL's which need the rawBody
+    verify: (req, res, buf) => {
+        if(req.originalUrl === '/stripe/subscription_update'){
+            req.rawBody = buf.toString();
+        }
+    }
+}));
+
+// Set locales from session
+app.use(i18n.init);
 
 // serving static content
 app.use(express.static(path.join(__dirname, 'public')));
@@ -247,15 +314,6 @@ app.use(express.static(path.join(__dirname, 'views', 'themes')));
 app.use((req, res, next) => {
     req.handlebars = handlebars;
     next();
-});
-
-// update config when modified
-app.use((req, res, next) => {
-    next();
-    if(res.configDirty){
-        config = common.getConfig();
-        app.config = config;
-    }
 });
 
 // Ran on all routes
@@ -274,10 +332,11 @@ app.use('/', admin);
 app.use('/paypal', paypal);
 app.use('/stripe', stripe);
 app.use('/authorizenet', authorizenet);
+app.use('/adyen', adyen);
 
 // catch 404 and forward to error handler
 app.use((req, res, next) => {
-    let err = new Error('Not Found');
+    const err = new Error('Not Found');
     err.status = 404;
     next(err);
 });
@@ -322,49 +381,60 @@ app.on('uncaughtException', (err) => {
     process.exit(2);
 });
 
-MongoClient.connect(config.databaseConnectionString, {}, (err, client) => {
+initDb(config.databaseConnectionString, async (err, db) => {
     // On connection error we display then exit
     if(err){
         console.log(colors.red('Error connecting to MongoDB: ' + err));
         process.exit(2);
     }
 
-    // select DB
-    const dbUriObj = mongodbUri.parse(config.databaseConnectionString);
-    let db;
-    // if in testing, set the testing DB
-    if(process.env.NODE_ENV === 'test'){
-        db = client.db('testingdb');
-    }else{
-        db = client.db(dbUriObj.database);
-    }
-
-    // setup the collections
-    db.users = db.collection('users');
-    db.products = db.collection('products');
-    db.orders = db.collection('orders');
-    db.pages = db.collection('pages');
-    db.menu = db.collection('menu');
-    db.customers = db.collection('customers');
-
     // add db to app for routes
-    app.dbClient = client;
     app.db = db;
     app.config = config;
     app.port = app.get('port');
 
-    // run indexing
-    common.runIndexing(app)
-    .then(app.listen(app.get('port')))
-    .then(() => {
-        // lift the app
-        app.emit('appStarted');
-        console.log(colors.green('expressCart running on host: http://localhost:' + app.get('port')));
-    })
-    .catch((err) => {
-        console.error(colors.red('Error setting up indexes:' + err));
-        process.exit(2);
+    // Fire up the cron job to clear temp held stock
+    cron.schedule('*/1 * * * *', async () => {
+        const validSessions = await db.sessions.find({}).toArray();
+        const validSessionIds = [];
+        _.forEach(validSessions, (value) => {
+            validSessionIds.push(value._id);
+        });
+
+        // Remove any invalid cart holds
+        await db.cart.deleteMany({
+            sessionId: { $nin: validSessionIds }
+        });
     });
+
+    // Set trackStock for testing
+    if(process.env.NODE_ENV === 'test'){
+        config.trackStock = true;
+    }
+
+    // Process schemas
+    await addSchemas();
+
+    // We index when not in test env
+    if(process.env.NODE_ENV !== 'test'){
+        try{
+            await runIndexing(app);
+        }catch(ex){
+            console.error(colors.red('Error setting up indexes:' + err));
+        }
+    }
+
+    // Start the app
+    try{
+        await app.listen(app.get('port'));
+        app.emit('appStarted');
+        if(process.env.NODE_ENV !== 'test'){
+            console.log(colors.green('expressCart running on host: http://localhost:' + app.get('port')));
+        }
+    }catch(ex){
+        console.error(colors.red('Error starting expressCart app:' + err));
+        process.exit(2);
+    }
 });
 
 module.exports = app;
